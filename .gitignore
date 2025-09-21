@@ -1,0 +1,8 @@
+.env
+.py_cache__/
+__pycache__/
+*.pyc
+chroma_db
+temp_uploads
+active_profile.json
+transcript_cache.json

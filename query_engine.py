@@ -13,18 +13,61 @@ collection = client.get_or_create_collection(name=COLLECTION_NAME)
 # Context-Aware Router Function
 def choose_tool(query: str, available_tools: List[Dict], conversation_profile: Dict) -> str:
     """
-    Uses an LLM to act as a router, selecting the best tool for a given user query
-    by considering the overall conversation profile.
+    Uses an LLM to act as a router with chain-of-thought reasoning,
+    selecting the best tool by considering query details and conversation profile.
     """
-    tool_descriptions = "\n".join(
-        [f"- Tool Name: {tool['name']}\n  Description: {tool['description']}" for tool in available_tools]
-    )
+    # Get conversation history from session state if available
+    conversation_history = ""
+    try:
+        import streamlit as st
+        if hasattr(st, 'session_state') and 'messages' in st.session_state:
+            recent_messages = st.session_state.messages[-6:]  # Last 3 exchanges
+            conversation_history = "\n".join([
+                f"{msg['role'].upper()}: {msg['content']}" 
+                for msg in recent_messages
+            ])
+    except:
+        conversation_history = "No conversation history available."
     
-    # The conversation profile is now included in the prompt for better decision
+    # Pre-check for explicit keywords - FIXED LOGIC
+    query_lower = query.lower()
+    chart_keywords = ['chart', 'graph', 'plot', 'visualize']
+    pdf_keywords = ['pdf', 'download']
+    report_keywords = ['report']
+    
+    # Check for direct keyword matches FIRST (preserves original functionality)
+    if any(keyword in query_lower for keyword in pdf_keywords):
+        print("Direct PDF keywords detected, routing to generate_pdf_report")
+        return "generate_pdf_report"
+    elif any(keyword in query_lower for keyword in report_keywords) and not any(keyword in query_lower for keyword in chart_keywords):
+        print("Direct report keywords detected (not chart), routing to generate_pdf_report")
+        return "generate_pdf_report"
+    elif any(keyword in query_lower for keyword in chart_keywords):
+        print("Direct chart keywords detected, proceeding with LLM chain-of-thought routing for chart selection")
+        # Continue to LLM routing for chart type selection
+    else:
+        print("No direct keywords detected, using LLM chain-of-thought routing")
+        # Continue to LLM routing
+    
+    # Chain-of-thought routing with LLM
+    tool_descriptions = "\n".join([
+        f"- Tool Name: {tool['name']}\n  Description: {tool['description']}" 
+        for tool in available_tools
+    ])
+    
     profile_str = json.dumps(conversation_profile, indent=2)
+    
     prompt = f"""
-    You are an intelligent routing agent. Your task is to select the single best tool to answer the user's query.
-    You MUST consider the overall Conversation Profile to make an informed decision. For example, sentiment analysis is more relevant for a 'Customer Support' call than an 'Informational Inquiry'.
+    You are an intelligent routing agent. Use chain-of-thought reasoning to select the best tool.
+
+    STEP 1: Analyze the user's query intent
+    STEP 2: Consider the conversation history and profile context  
+    STEP 3: Look for references to previous responses or conversation elements
+    STEP 4: Match the intent to the most appropriate tool
+    STEP 5: Provide your final decision
+
+    Conversation History:
+    {conversation_history}
 
     Conversation Profile:
     {profile_str}
@@ -34,19 +77,34 @@ def choose_tool(query: str, available_tools: List[Dict], conversation_profile: D
 
     User Query: "{query}"
 
-    Respond with ONLY the name of the tool. Do not add any explanation or conversation.
+    Think step by step:
+    1. What is the user asking for? (chart, text summary, PDF report, etc.)
+    2. What type of analysis is needed? (simple counting, complex analysis, etc.)
+    3. Does the query reference previous conversation context or responses?
+    4. Are there implicit references to earlier discussion points?
+    5. Which tool best matches this intent considering the conversation flow?
+
+    Show your reasoning for each step, then provide:
+    Final Decision: [exact_tool_name]
     """
     
-    # Using LLM to decide which tool to use
-    chosen_tool_name = _call_llm(prompt, context="") 
+    print("Using chain-of-thought routing...")
+    response = _call_llm(prompt, context="")
+    print(f"LLM routing response: {response}")
     
-    # Cleaning the response to ensure we only get the tool name
+    # Extract the final decision
+    if "Final Decision:" in response:
+        chosen_tool_name = response.split("Final Decision:")[-1].strip()
+    else:
+        chosen_tool_name = response.strip()
+    
+    # Match against available tools
     for tool in available_tools:
         if tool['name'] in chosen_tool_name:
-            print(f"Router selected tool: {tool['name']} based on profile: {conversation_profile.get('conversation_type')}")
+            print(f"Router selected tool: {tool['name']}")
             return tool['name']
-            
-    # If the LLM fails to choose a valid tool default to a text summary
+    
+    # Final fallback (shouldn't happen if LLM works correctly)
     print("Router defaulted to: summarize_text")
     return "summarize_text"
 
