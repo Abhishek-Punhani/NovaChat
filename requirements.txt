@@ -30,3 +30,10 @@ plotly>=5.19.0
 
 # Optional (LLM calls / future)
 openai>=1.30.0
+langchain
+langchain-groq
+faster-whisper
+sounddevice
+numpy
+python-dotenv
+pyttsx3
