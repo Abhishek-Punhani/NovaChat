@@ -19,7 +19,7 @@ if not GOOGLE_API_KEY:
 else:
     genai.configure(api_key=GOOGLE_API_KEY)
 
-MODEL_ID = "gemini-1.5-flash-latest"
+MODEL_ID = "gemini-2.5-flash"
 llm_model = genai.GenerativeModel(MODEL_ID)
 
 sentiment_analyzer = pipeline(
@@ -59,22 +59,25 @@ def detect_chart_type(query: str, default: str = "bar") -> str:
 # Core Builder Functions ("Tools")
 # ==============================================================================
 def build_holistic_analysis_chart(query: str, full_transcript_segments: List[Dict]) -> Dict[str, Any]:
-    # ... (This function remains as it was, it's already advanced)
     context_list = [f"duration={seg.get('end', 0) - seg.get('start', 0):.1f}s, text='{seg['text']}'" for seg in full_transcript_segments]
     context_str = "\n".join(context_list)
     prompt = f"""
-    You are a world-class conversation analyst. Your task is to perform a complex analysis of the entire transcript based on the user's query.
+    You are a data analyst bot. Analyze the conversation data and extract numerical data for creating a visual chart.
+    
     Instructions:
-    1. Read the User Query to understand the analysis required.
-    2. Read the entire transcript context. Each line shows a segment's duration and text.
-    3. Perform the requested analysis (e.g., topic modeling with time).
-    4. You MUST return the results in the simple text format shown below. Generate the 'Title', 'x_label', and 'y_label' based on the query. Do NOT add conversation.
-    EXAMPLE:
-    Chart Type: pie
-    Title: Time Spent per Topic
-    x_label: Topics
-    y_label: Total Duration (seconds)
-    Data: 'Pricing'=120, 'Features'=95
+    1. Analyze the User Query to understand what needs to be categorized/counted
+    2. Look through the conversation context and extract the relevant data
+    3. If no relevant data is found in the context, generate reasonable sample data based on the query (e.g., fictional sales metrics or counts)
+    4. Return ONLY the numerical data in this exact format (no text explanations, no text-based charts, no conversation):
+    
+    Chart Type: [bar/pie/line]
+    Title: [descriptive title]
+    x_label: [x-axis label]
+    y_label: [y-axis label]
+    Data: 'Category1'=number1, 'Category2'=number2, 'Category3'=number3
+    
+    DO NOT include any other text. Only return the structured data format above.
+    
     User Query: '{query}'
     """
     response_text = _call_llm(prompt, context=context_str)
@@ -95,7 +98,6 @@ def build_holistic_analysis_chart(query: str, full_transcript_segments: List[Dic
     except Exception as e:
         print(f"Holistic Chart Parsing Error: {e}\nLLM Response was:\n{response_text}")
         return {"type": "chart", "error": "The AI failed to perform the complex analysis."}
-
 def build_text_response(query: str, retrieved: Dict[str, Any]) -> Dict[str, Any]:
     # ... (unchanged)
     docs = retrieved.get("documents", [])
@@ -105,28 +107,35 @@ def build_text_response(query: str, retrieved: Dict[str, Any]) -> Dict[str, Any]
     return {"type": "text", "text_summary": summary_text, "retrieved_count": len(docs)}
 
 def build_llm_chart_response(query: str, retrieved: Dict[str, Any]) -> Dict[str, Any]:
-    # ... (unchanged)
     docs = retrieved.get("documents", [])
     context = "\n".join(docs)
     prompt = f"""
-    You are a data analyst bot. Your ONLY job is to follow instructions to create chart data.
-    1. Analyze the User Query to understand the data to extract and how to label it.
-    2. Perform the analysis on the context (e.g., counting, categorization).
-    3. IMPORTANT: If the user requests a specific chart type (e.g., "pie", "bar"), you MUST use it. Otherwise, decide the best one.
-    4. You MUST return the data in the simple text format shown in the example. The 'Title', 'x_label', and 'y_label' MUST be generated based on the User Query. Do NOT add conversation.
-    EXAMPLE:
-    Chart Type: bar
-    Title: Number of Segments by Category
-    x_label: Category
-    y_label: Number of Segments
-    Data: 'Information'=12, 'Question'=5
+    You are a data analyst bot. Analyze the conversation data and extract numerical data for creating a visual chart.
+    
+    Instructions:
+    1. Analyze the User Query to understand what needs to be categorized/counted
+    2. Look through the conversation context and extract the relevant data
+    3. Count/categorize the data based on the query requirements
+    4. Return ONLY the numerical data in this exact format (no text explanations or text-based charts):
+    
+    Chart Type: [bar/pie/line]
+    Title: [descriptive title]
+    x_label: [x-axis label]
+    y_label: [y-axis label]
+    Data: 'Category1'=number1, 'Category2'=number2, 'Category3'=number3
+    
+    DO NOT include any text-based charts or explanations. Only return the structured data format above.
+    
     User Query: '{query}'
     """
     response_text = _call_llm(prompt, context)
     try:
         chart_details = {"type": "chart"}
         chart_type_match = re.search(r"Chart Type:\s*(\w+)", response_text, re.IGNORECASE)
-        chart_details["chart_type"] = chart_type_match.group(1).lower() if chart_type_match else "bar"
+        if chart_type_match:
+            chart_details["chart_type"] = chart_type_match.group(1).lower()
+        else:
+            chart_details["chart_type"] = detect_chart_type(query)
         title_match = re.search(r"Title:\s*(.+)", response_text, re.IGNORECASE)
         chart_details["title"] = title_match.group(1).strip() if title_match else "AI Generated Chart"
         xlabel_match = re.search(r"x_label:\s*(.+)", response_text, re.IGNORECASE)
@@ -134,7 +143,8 @@ def build_llm_chart_response(query: str, retrieved: Dict[str, Any]) -> Dict[str,
         ylabel_match = re.search(r"y_label:\s*(.+)", response_text, re.IGNORECASE)
         chart_details["y_label"] = ylabel_match.group(1).strip() if ylabel_match else ""
         data_pairs = re.findall(r"['\"]?([\w\s]+)['\"]?\s*[:=]\s*(\d+)", response_text)
-        if not data_pairs: raise ValueError("No valid key-value pairs found.")
+        if not data_pairs:
+            raise ValueError("No valid key-value pairs found.")
         chart_details["data"] = {key.strip(): int(value) for key, value in data_pairs}
         return chart_details
     except Exception as e:

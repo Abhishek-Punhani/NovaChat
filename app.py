@@ -30,7 +30,7 @@ tools = [
     {"name": "create_sentiment_trend_chart", "description": "A specialized tool that creates a line chart of sentiment over time. Use ONLY for direct questions about mood or sentiment."},
     {"name": "create_keyword_mention_chart", "description": "A simple tool that counts the frequency of specific, concrete keywords mentioned in the query. Use ONLY for direct questions like 'How often was the word fee mentioned?'."},
     {"name": "summarize_text", "description": "The default tool for general questions or text summaries."},
-    {"name": "generate_pdf_report", "description": "Creates a downloadable PDF report. Use for requests to 'download a report'."},
+    {"name": "generate_pdf_report", "description": "Creates a downloadable PDF report. Use for requests to 'generate a report', 'create a PDF', or 'download a report'."},
     {"name": "generate_audio_summary", "description": "Generates an audio narration of a summary. Use for requests to 'read the summary aloud'."}
 ]
 
