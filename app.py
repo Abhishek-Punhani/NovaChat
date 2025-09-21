@@ -3,6 +3,8 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from normalization import transcribe_audio
 from ingest import ingest_segments_to_chroma
@@ -34,46 +36,168 @@ tools = [
     {"name": "generate_audio_summary", "description": "Generates an audio narration of a summary. Use for requests to 'read the summary aloud'."}
 ]
 
-PROFILE_FILE = "active_profile.json"
-TRANSCRIPT_CACHE_FILE = "transcript_cache.json"
+PROFILES_DIR = "conversation_profiles"
+TRANSCRIPTS_DIR = "transcript_cache"
 
-if "current_profile" not in st.session_state:
-    if os.path.exists(PROFILE_FILE):
-        with open(PROFILE_FILE, "r") as f: st.session_state.current_profile = json.load(f)
-        if os.path.exists(TRANSCRIPT_CACHE_FILE):
-            with open(TRANSCRIPT_CACHE_FILE, "r") as f: st.session_state.full_transcript_segments = json.load(f)
-    else:
-        st.session_state.current_profile = None
-        st.session_state.full_transcript_segments = []
+# Initialize session state for multiple files
+if "conversation_files" not in st.session_state:
+    st.session_state.conversation_files = {}
+if "active_conversation" not in st.session_state:
+    st.session_state.active_conversation = None
 
-st.sidebar.header("Process New Call Data")
-uploaded_file = st.sidebar.file_uploader("Upload a file", type=["mp3", "wav", "txt", "csv", "json"])
+# Create directories
+os.makedirs(PROFILES_DIR, exist_ok=True)
+os.makedirs(TRANSCRIPTS_DIR, exist_ok=True)
+os.makedirs("temp_uploads", exist_ok=True)
 
-if st.session_state.current_profile:
-    st.sidebar.write("Current Active Profile:"); st.sidebar.json(st.session_state.current_profile)
+def process_single_file(file_info):
+    """Process a single file and return results"""
+    try:
+        file_path, file_name = file_info
+        file_ext = file_name.split('.')[-1].lower()
+        
+        # Parse or transcribe
+        if file_ext in ["txt", "csv", "json"]:
+            segments = parse_transcript_file(file_path)
+        else:
+            segments = transcribe_audio(file_path)
+        
+        # Ingest to ChromaDB with unique file_id
+        ingest_segments_to_chroma(segments, file_id=file_name)
+        
+        # Create profile
+        full_text = " ".join([seg['text'] for seg in segments])
+        profile = create_conversation_profile(full_text)
+        profile['source_file'] = file_name
+        
+        return {
+            'file_name': file_name,
+            'profile': profile,
+            'segments': segments,
+            'status': 'success'
+        }
+    except Exception as e:
+        return {
+            'file_name': file_name,
+            'error': str(e),
+            'status': 'error'
+        }
 
-if uploaded_file is not None:
-    file_path = os.path.join("temp_uploads", uploaded_file.name)
-    os.makedirs("temp_uploads", exist_ok=True)
-    with open(file_path, "wb") as f: f.write(uploaded_file.getbuffer())
-    if st.sidebar.button("Process File"):
-        with st.spinner("Processing..."):
-            try:
-                file_ext = uploaded_file.name.split('.')[-1].lower()
-                segments = parse_transcript_file(file_path) if file_ext in ["txt", "csv", "json"] else transcribe_audio(file_path)
-                ingest_segments_to_chroma(segments, file_id=uploaded_file.name)
-                full_text = " ".join([seg['text'] for seg in segments])
-                profile = create_conversation_profile(full_text)
-                profile['source_file'] = uploaded_file.name
-                st.session_state.current_profile = profile
-                st.session_state.full_transcript_segments = segments
-                with open(PROFILE_FILE, "w") as f: json.dump(profile, f)
-                with open(TRANSCRIPT_CACHE_FILE, "w") as f: json.dump(segments, f)
-                st.sidebar.success("File processed and profiled!")
-                st.rerun()
-            except Exception as e:
-                st.sidebar.error(f"An error occurred: {e}")
+# Sidebar for file management
+st.sidebar.header("📁 Conversation Manager")
 
+# Multi-file uploader
+uploaded_files = st.sidebar.file_uploader(
+    "Upload conversation files", 
+    type=["mp3", "wav", "txt", "csv", "json"],
+    accept_multiple_files=True
+)
+
+if uploaded_files:
+    st.sidebar.write(f"📤 {len(uploaded_files)} files selected")
+    
+    if st.sidebar.button("🚀 Process All Files"):
+        with st.spinner(f"Processing {len(uploaded_files)} files concurrently..."):
+            # Save uploaded files
+            file_paths = []
+            for uploaded_file in uploaded_files:
+                file_path = os.path.join("temp_uploads", uploaded_file.name)
+                with open(file_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                file_paths.append((file_path, uploaded_file.name))
+            
+            # Process files concurrently (max 5 at a time)
+            results = []
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_file = {executor.submit(process_single_file, file_info): file_info[1] 
+                                for file_info in file_paths}
+                
+                # Show progress
+                progress_bar = st.sidebar.progress(0)
+                completed = 0
+                
+                for future in as_completed(future_to_file):
+                    result = future.result()
+                    results.append(result)
+                    completed += 1
+                    progress_bar.progress(completed / len(uploaded_files))
+            
+            # Update session state
+            for result in results:
+                if result['status'] == 'success':
+                    st.session_state.conversation_files[result['file_name']] = {
+                        'profile': result['profile'],
+                        'segments': result['segments']
+                    }
+                    
+                    # Save to disk
+                    profile_path = os.path.join(PROFILES_DIR, f"{result['file_name']}_profile.json")
+                    transcript_path = os.path.join(TRANSCRIPTS_DIR, f"{result['file_name']}_transcript.json")
+                    
+                    with open(profile_path, "w") as f:
+                        json.dump(result['profile'], f)
+                    with open(transcript_path, "w") as f:
+                        json.dump(result['segments'], f)
+                else:
+                    st.sidebar.error(f"❌ {result['file_name']}: {result['error']}")
+            
+            success_count = sum(1 for r in results if r['status'] == 'success')
+            st.sidebar.success(f"✅ Successfully processed {success_count}/{len(uploaded_files)} files!")
+            st.rerun()
+
+# Display loaded conversations
+if st.session_state.conversation_files:
+    st.sidebar.subheader("💬 Available Conversations")
+    
+    conversation_names = list(st.session_state.conversation_files.keys())
+    selected_conversation = st.sidebar.selectbox(
+        "Select active conversation:",
+        options=conversation_names,
+        index=conversation_names.index(st.session_state.active_conversation) 
+        if st.session_state.active_conversation in conversation_names else 0
+    )
+    
+    if selected_conversation != st.session_state.active_conversation:
+        st.session_state.active_conversation = selected_conversation
+        st.rerun()
+    
+    # Show active conversation info
+    if st.session_state.active_conversation:
+        active_data = st.session_state.conversation_files[st.session_state.active_conversation]
+        st.sidebar.write("🎯 **Active Conversation:**")
+        st.sidebar.write(f"📄 {st.session_state.active_conversation}")
+        
+        with st.sidebar.expander("View Profile"):
+            st.json(active_data['profile'])
+
+# Load existing conversations on startup
+def load_existing_conversations():
+    """Load previously processed conversations"""
+    if os.path.exists(PROFILES_DIR):
+        for profile_file in os.listdir(PROFILES_DIR):
+            if profile_file.endswith("_profile.json"):
+                file_name = profile_file.replace("_profile.json", "")
+                transcript_file = os.path.join(TRANSCRIPTS_DIR, f"{file_name}_transcript.json")
+                
+                if os.path.exists(transcript_file):
+                    try:
+                        with open(os.path.join(PROFILES_DIR, profile_file), "r") as f:
+                            profile = json.load(f)
+                        with open(transcript_file, "r") as f:
+                            segments = json.load(f)
+                        
+                        st.session_state.conversation_files[file_name] = {
+                            'profile': profile,
+                            'segments': segments
+                        }
+                    except Exception as e:
+                        continue
+
+# Load existing conversations on first run
+if not st.session_state.conversation_files:
+    load_existing_conversations()
+
+# ...existing code for messages and display_chart...
 if "messages" not in st.session_state:
     st.session_state.messages = []
 for message in st.session_state.messages:
@@ -102,28 +226,34 @@ def display_chart(response):
     else:
         st.error(response.get("error"))
 
+# Modified chat input to work with selected conversation
 if prompt := st.chat_input("Ask anything about your calls..."):
+    if not st.session_state.active_conversation:
+        st.warning("Please select an active conversation first.")
+        st.stop()
+    
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"): st.markdown(prompt)
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            profile = st.session_state.get("current_profile")
-            if not profile:
-                st.warning("Please process a file first."); st.stop()
+            # Get active conversation data
+            active_data = st.session_state.conversation_files[st.session_state.active_conversation]
+            profile = active_data['profile']
+            full_transcript_segments = active_data['segments']
 
             chosen_tool = choose_tool(prompt, tools, profile)
             
             if chosen_tool == "create_holistic_analysis_chart":
-                full_transcript = st.session_state.get("full_transcript_segments", [])
-                response = build_holistic_analysis_chart(prompt, full_transcript)
+                response = build_holistic_analysis_chart(prompt, full_transcript_segments)
                 display_chart(response)
             else:
                 top_k = 75 if any(k in chosen_tool for k in ["activity", "sentiment", "turn_count"]) else 20
-                retrieved = query_chroma(prompt, top_k=top_k)
+                # Query ChromaDB with file-specific filter
+                metadata_filters = {"file_id": st.session_state.active_conversation}
+                retrieved = query_chroma(prompt, top_k=top_k, metadata_filters=metadata_filters)
 
                 if "chart" in chosen_tool:
-                    # --- MODIFICATION: Pass the 'prompt' to the builder functions ---
                     if chosen_tool == "create_speaker_turn_count_chart":
                         response = build_speaker_turn_count_chart(prompt, retrieved)
                     elif chosen_tool == "create_sentiment_trend_chart":
@@ -142,10 +272,25 @@ if prompt := st.chat_input("Ask anything about your calls..."):
                     text_response = build_text_response(prompt, retrieved)
                     summary_text = text_response.get("text_summary")
                     if summary_text and not summary_text.startswith("Error:"):
-                        audio_response = build_audio_response(summary_text)
-                        st.audio(audio_response["audio_path"])
-                    else: st.error("Could not generate audio.")
-                else: # Catches "summarize_text"
+                        audio_file_path = f"temp_uploads/audio_{len(st.session_state.messages)}.mp3"
+                        audio_response = build_audio_response(summary_text, out_mp3=audio_file_path)
+                        
+                        if os.path.exists(audio_response["audio_path"]):
+                            with open(audio_response["audio_path"], "rb") as audio_file:
+                                st.audio(audio_file.read(), format="audio/mp3")
+                            
+                            with open(audio_response["audio_path"], "rb") as audio_file:
+                                st.download_button(
+                                    "Download Audio Summary",
+                                    audio_file,
+                                    file_name=f"summary_{len(st.session_state.messages)}.mp3",
+                                    mime="audio/mp3"
+                                )
+                        else:
+                            st.error("Failed to generate audio file.")
+                    else: 
+                        st.error("Could not generate audio - no valid text to convert.")
+                else: 
                     response = build_text_response(prompt, retrieved)
                     st.markdown(response.get("text_summary", "Sorry, I couldn't find an answer."))
 
