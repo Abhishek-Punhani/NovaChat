@@ -233,6 +233,12 @@ Step 5: Execute with full context awareness
    pip install --upgrade -r requirements.txt
    ```
 
+## 🖥️ Presentation & Demo
+
+- **Project Presentation (PPT)**: [View Google Slides](https://docs.google.com/presentation/d/1UahU0C1VLEXhlkRd8BtjXnSG6GI2lo-1/edit?usp=drive_link&ouid=108092071704659088422&rtpof=true&sd=true)  
+- **Demo Video**: [Watch Demo](https://drive.google.com/file/d/1djk6g8MKvJQDLQVWlRQXC8SarzewL5gr/view?usp=drive_link)
+
+
 ## 🤝 **Contributing**
 
 1. Fork the repository
