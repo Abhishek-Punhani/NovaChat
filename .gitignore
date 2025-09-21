@@ -6,5 +6,5 @@ chroma_db
 temp_uploads
 active_profile.json
 transcript_cache.json
-conversation_profiles/** */
-transcript_cache/** */
+conversation_profiles/
+transcript_cache/
