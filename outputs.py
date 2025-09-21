@@ -8,9 +8,6 @@ import pandas as pd
 from transformers import pipeline
 import google.generativeai as genai
 
-# ==============================================================================
-# AI Integration & Models
-# ==============================================================================
 
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -208,6 +205,24 @@ def build_sentiment_trend_chart(query: str, retrieved: Dict[str, Any]) -> Dict[s
     }
 
 def build_audio_response(text: str, out_mp3: str = "narration.mp3") -> Dict[str, Any]:
-    tts = gTTS(text=text, lang="en")
-    tts.save(out_mp3)
-    return {"type": "audio", "audio_path": out_mp3}
+    """
+    Generates an MP3 audio file from text using Google Text-to-Speech.
+    """
+    try:
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(out_mp3) if os.path.dirname(out_mp3) else ".", exist_ok=True)
+        
+        # Generate TTS
+        tts = gTTS(text=text, lang="en")
+        tts.save(out_mp3)
+        
+        # Verify file was created
+        if os.path.exists(out_mp3):
+            print(f"Audio file successfully created: {out_mp3}")
+            return {"type": "audio", "audio_path": out_mp3}
+        else:
+            raise FileNotFoundError(f"Audio file was not created at {out_mp3}")
+            
+    except Exception as e:
+        print(f"Error generating audio: {e}")
+        return {"type": "audio", "error": f"Failed to generate audio: {e}"}

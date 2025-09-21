@@ -142,9 +142,30 @@ if prompt := st.chat_input("Ask anything about your calls..."):
                     text_response = build_text_response(prompt, retrieved)
                     summary_text = text_response.get("text_summary")
                     if summary_text and not summary_text.startswith("Error:"):
-                        audio_response = build_audio_response(summary_text)
-                        st.audio(audio_response["audio_path"])
-                    else: st.error("Could not generate audio.")
+                        # Generate audio with proper file path
+                        audio_file_path = f"temp_uploads/audio_{len(st.session_state.messages)}.mp3"
+                        os.makedirs("temp_uploads", exist_ok=True)
+                        
+                        audio_response = build_audio_response(summary_text, out_mp3=audio_file_path)
+                        
+                        # Check if file was created successfully
+                        if os.path.exists(audio_response["audio_path"]):
+                            # Display the audio player
+                            with open(audio_response["audio_path"], "rb") as audio_file:
+                                st.audio(audio_file.read(), format="audio/mp3")
+                            
+                            # Optionally provide download button
+                            with open(audio_response["audio_path"], "rb") as audio_file:
+                                st.download_button(
+                                    "Download Audio Summary",
+                                    audio_file,
+                                    file_name=f"summary_{len(st.session_state.messages)}.mp3",
+                                    mime="audio/mp3"
+                                )
+                        else:
+                            st.error("Failed to generate audio file.")
+                    else: 
+                        st.error("Could not generate audio - no valid text to convert.")
                 else: # Catches "summarize_text"
                     response = build_text_response(prompt, retrieved)
                     st.markdown(response.get("text_summary", "Sorry, I couldn't find an answer."))
